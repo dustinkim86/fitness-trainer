@@ -48,6 +48,8 @@ function kstDateKey(){
   return d.toISOString().slice(0,10);
 }
 const DATE_KEY=kstDateKey();
+// bfcache 복원 시 날짜가 바뀌었으면 즉시 새로고침 (iOS PWA 대응)
+window.addEventListener('pageshow',function(){if(kstDateKey()!==DATE_KEY)window.location.reload();});
 const TODAY_KST=new Date(Date.now()+9*60*60*1000);
 const TODAY_DAY=DAYS[TODAY_KST.getUTCDay()];
 const DATE_WEEKDAY=WEEKDAY_KO[TODAY_KST.getUTCDay()];
@@ -696,6 +698,7 @@ function App(){
   },[historyDate]);
 
   const toggle=useCallback((key)=>{
+    if(kstDateKey()!==DATE_KEY){window.location.reload();return;}
     setChecks(prev=>{
       const next={...prev,[key]:!prev[key]};
       dbSet(DATE_KEY,'checks',next).then(()=>setSaveErr(null)).catch(()=>setSaveErr('저장 실패'));
@@ -737,9 +740,11 @@ function App(){
   const isRestDay=wDay==='일';
   const meals=isRestDay?MEALS_REST:MEALS_WORKOUT;
   const macroTarget={kcal:2350,carbs:300,protein:120,fat:75};
-  const mealDone=meals.filter(m=>checks[`meal_${m.id}`]).length;
-  const suppDone=SUPPS.filter(s=>checks[`sup_${s.id}`]).length;
-  const mobDone=MOBILITY.filter(m=>checks[`mob_${m.id}`]).length;
+  const isDateStale=kstDateKey()!==DATE_KEY;
+  const todayChecks=isDateStale?{}:checks;
+  const mealDone=meals.filter(m=>todayChecks[`meal_${m.id}`]).length;
+  const suppDone=SUPPS.filter(s=>todayChecks[`sup_${s.id}`]).length;
+  const mobDone=MOBILITY.filter(m=>todayChecks[`mob_${m.id}`]).length;
   const timerVisible=!!(restTimer&&timerRem>0);
 
   if(loading)return(
@@ -874,7 +879,7 @@ function App(){
             <span style={{fontSize:12,color:T,fontWeight:700}}>{mobDone}/{MOBILITY.length}</span>
           </div>
           {MOBILITY.map(m=>{
-            const k=`mob_${m.id}`;const done=!!checks[k];
+            const k=`mob_${m.id}`;const done=!!todayChecks[k];
             return(
               <div key={m.id} onClick={()=>toggle(k)}
                 style={{background:'var(--bg2)',borderRadius:10,cursor:'pointer',
@@ -923,7 +928,7 @@ function App(){
             </div>
           </div>
           {meals.map(meal=>{
-            const k=`meal_${meal.id}`;const done=!!checks[k];
+            const k=`meal_${meal.id}`;const done=!!todayChecks[k];
             return(
               <div key={meal.id} style={{background:'var(--bg2)',borderRadius:12,padding:'14px 16px',marginBottom:8,opacity:done?0.5:1,transition:'opacity 0.2s'}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
@@ -972,7 +977,7 @@ function App(){
             </div>
           </div>
           {SUPPS.map(s=>{
-            const k=`sup_${s.id}`;const done=!!checks[k];
+            const k=`sup_${s.id}`;const done=!!todayChecks[k];
             return(
               <div key={s.id} onClick={()=>toggle(k)}
                 style={{background:'var(--bg2)',borderRadius:10,cursor:'pointer',
