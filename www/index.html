@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="JH Fit"/>
+<meta name="theme-color" content="#0f0f0f"/>
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="icon-192.png"/>
+<title>Junho Fitness</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body,#app{height:100%}
+body{background:#0f0f0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#fff}
+#app{max-width:480px;margin:0 auto;min-height:100vh;background:#0f0f0f}
+input[type=number]{-moz-appearance:textfield;font-size:16px}
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none}
+button{font-family:inherit;cursor:pointer}
+:root{
+  --amber:#EF9F27;--teal:#1D9E75;
+  --bg:#0f0f0f;--bg2:#141414;--bg3:#1e1e1e;--bg4:#272727;
+  --text:#ffffff;--text2:#888;--text3:#555;
+  --border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.14);
+  --r:10px;--rl:12px;
+}
+@keyframes bar{0%{left:-40%}100%{left:100%}}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+::-webkit-scrollbar{display:none}
+*{scrollbar-width:none}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="react.min.js" crossorigin></script>
+<script src="react-dom.min.js" crossorigin></script>
+<script src="babel.min.js"></script>
+<script type="text/babel" data-presets="react">
+const {useState,useEffect,useRef,useCallback,useMemo}=React;
+
+const DAYS=['일','월','화','수','목','금','토'];
+const WEEKDAY_KO=['일요일','월요일','화요일','수요일','목요일','금요일','토요일'];
+
+function kstDateKey(){
+  const d=new Date(Date.now()+9*60*60*1000);
+  return d.toISOString().slice(0,10);
+}
+const DATE_KEY=kstDateKey();
+// bfcache 복원 시 날짜가 바뀌었으면 즉시 새로고침 (iOS PWA 대응)
+window.addEventListener('pageshow',function(){if(kstDateKey()!==DATE_KEY)window.location.reload();});
+const TODAY_KST=new Date(Date.now()+9*60*60*1000);
+const TODAY_DAY=DAYS[TODAY_KST.getUTCDay()];
+const DATE_WEEKDAY=WEEKDAY_KO[TODAY_KST.getUTCDay()];
+const DATE_MD=`${TODAY_KST.getUTCMonth()+1}/${TODAY_KST.getUTCDate()}`;
+const A='#EF9F27',T='#1D9E75';
+const EB='https://exrx.net/AnimatedEx';
+
+// ── Supabase ──
+const SB='https://rtjbzvsmeigmwxpswotp.supabase.co';
+const SK='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ0amJ6dnNtZWlnbXd4cHN3b3RwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2MTUwNDYsImV4cCI6MjA5MTE5MTA0Nn0.w4PPPnQ6Ej5MG8gvdRhV5VdIYbybTgzj7SrqR27xwUg';
+const SBH={'Content-Type':'application/json','apikey':SK,'Authorization':`Bearer ${SK}`,'Prefer':'resolution=merge-duplicates'};
+
+async function dbGet(dk,sk){
+  const r=await fetch(`${SB}/rest/v1/junho_fitness?date_key=eq.${dk}&store_key=eq.${sk}&select=value`,{headers:SBH});
+  if(!r.ok)throw new Error(`${r.status}`);
+  const d=await r.json();
+  return(d&&d.length>0)?JSON.parse(d[0].value):null;
+}
+async function dbSet(dk,sk,val){
+  const r=await fetch(`${SB}/rest/v1/junho_fitness?on_conflict=date_key,store_key`,{
+    method:'POST',headers:SBH,
+    body:JSON.stringify({date_key:dk,store_key:sk,value:JSON.stringify(val),updated_at:new Date().toISOString()})
+  });
+  if(!r.ok)throw new Error(`${r.status}`);
+}
+async function dbGetMonth(year,month){
+  const from=`${year}-${String(month).padStart(2,'0')}-01`;
+  const to=`${year}-${String(month).padStart(2,'0')}-31`;
+  const r=await fetch(`${SB}/rest/v1/junho_fitness?date_key=gte.${from}&date_key=lte.${to}&select=date_key,store_key`,{headers:SBH});
+  if(!r.ok)throw new Error(`${r.status}`);
+  return await r.json();
+}
+async function dbGetRecentWorkouts(beforeDate){
+  const r=await fetch(`${SB}/rest/v1/junho_fitness?store_key=eq.workout_v2&date_key=lt.${beforeDate}&order=date_key.desc&limit=30&select=date_key,value`,{headers:SBH});
+  if(!r.ok)throw new Error(`${r.status}`);
+  return await r.json();
+}
+
+// ── Audio (Web Audio API) ──
+let _audioCtx=null;
+function getAudioCtx(){
+  if(!_audioCtx)_audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+  if(_audioCtx.state==='suspended')_audioCtx.resume();
+  return _audioCtx;
+}
+function playBeep(freq=880,dur=0.1,vol=0.35){
+  try{
+    const ctx=getAudioCtx();
+    const osc=ctx.createOscillator();
+    const g=ctx.createGain();
+    osc.connect(g);g.connect(ctx.destination);
+    osc.type='sine';osc.frequency.value=freq;
+    g.gain.setValueAtTime(vol,ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+dur);
+    osc.start(ctx.currentTime);osc.stop(ctx.currentTime+dur);
+  }catch(e){}
+}
+function playCountdownBeep(){playBeep(440,0.1,0.3);}
+function playEndBeep(){
+  playBeep(660,0.12,0.45);
+  setTimeout(()=>playBeep(880,0.12,0.45),160);
+  setTimeout(()=>playBeep(1100,0.22,0.45),320);
+}
+
+// ── Workout Data ──
+const WORKOUT={
+  월:{name:'하체',color:T,exercises:[
+    {id:'w1',wu:true,name:'시티드 레그 컬',sets:3,reps:'15-20',rest:30,note:'최대수축 시 튕기지 말 것. 너무 과하게 접으려 하지 않아도 됨',gif:`${EB}/Hamstring/MLegCurl.gif`},
+    {id:'w2',name:'스탠딩 카프 레이즈',sets:4,reps:'10-12',rest:60,gif:`${EB}/Gastrocnemius/BBCalfRaise.gif`},
+    {id:'w3',name:'바벨 백스쿼트',sets:4,reps:'6-8',rest:150,note:'허리 말리지 않게 가슴 열기. 무릎 바깥으로. 중심 미드풋.',alt:'리버스 브이 스쿼트',gif:`${EB}/Quadriceps/BBSquat.gif`},
+    {id:'w4',name:'레그 프레스 (45도)',sets:4,reps:'6-8',rest:105,alt:'덤벨 프론트 스쿼트',gif:`${EB}/Quadriceps/SMLegPress45.gif`},
+    {id:'w5',name:'루마니안 데드리프트',sets:3,reps:'6-8',rest:105,gif:`${EB}/HamstringGrace/BBRomanianDeadlift.gif`},
+    {id:'w6',name:'불가리안 스플릿 스쿼트',sets:3,reps:'6-8',rest:90,gif:`${EB}/Quadriceps/DBBulgarianSplitSquat.gif`},
+  ]},
+  화:{name:'등 (광배+승모)',color:'#378ADD',exercises:[
+    {id:'h1',wu:true,name:'와이드 그립 랫풀다운',sets:3,reps:'15-20',rest:30,gif:`${EB}/LatissimusDorsi/CBWideGripLAPulldown.gif`},
+    {id:'h2',name:'컨벤셔널 데드리프트',sets:4,reps:'6-8',rest:150,gif:`${EB}/ErectorSpinae/BBDeadlift.gif`},
+    {id:'h3',name:'웨이티드 풀업',sets:3,reps:'6-8',rest:150,gif:`${EB}/LatissimusDorsi/WtPullup.gif`},
+    {id:'h4',name:'원암 덤벨 로우',sets:3,reps:'6-8',rest:90,gif:`${EB}/LatissimusDorsi/DBBentOverRow.gif`},
+    {id:'h5',name:'체스트 서포티드 로우',sets:3,reps:'6-8',rest:90,gif:`${EB}/LatissimusDorsi/DBInclineRow.gif`},
+    {id:'h6',name:'바벨 쉬러그',sets:3,reps:'6-8',rest:75,gif:`${EB}/TrapeziusUpper/BBShrug.gif`},
+  ]},
+  수:{name:'가슴+어깨',color:'#D85A30',exercises:[
+    {id:'c1',wu:true,name:'케이블 체스트 플라이',sets:3,reps:'15-20',rest:30,gif:`${EB}/PectoralSternal/CBCrossover.gif`},
+    {id:'c2',name:'바벨 벤치프레스',sets:4,reps:'6-8',rest:150,gif:`${EB}/PectoralSternal/BBBenchPress.gif`},
+    {id:'c3',name:'인클라인 머신 프레스',sets:3,reps:'6-8',rest:105,gif:`${EB}/PectoralClavicular/SMInclinePress.gif`},
+    {id:'c4',name:'바벨 오버헤드 프레스 (OHP)',sets:3,reps:'6-8',rest:105,gif:`${EB}/DeltoidAnterior/BBMilitaryPress.gif`},
+    {id:'c5',name:'덤벨 숄더 프레스 (뉴트럴)',sets:3,reps:'6-8',rest:120,gif:`${EB}/DeltoidAnterior/DBShoulderPress.gif`},
+    {id:'c6',name:'덤벨 사이드 레터럴 레이즈',sets:3,reps:'8-10',rest:75,gif:`${EB}/DeltoidLateral/DBLateralRaise.gif`},
+  ]},
+  목:{name:'등 (승모+광배)',color:'#7F77DD',exercises:[
+    {id:'t1',wu:true,name:'와이 레이즈',sets:3,reps:'20-30',rest:30,note:'매일매일 수시로 할 것 (교정 용도)',gif:`${EB}/TrapeziusLower/DBProneYRaise.gif`},
+    {id:'t2',name:'랙풀 (Rack Pull)',sets:4,reps:'6-8',rest:150,note:'가슴 열어 하부 승모 힘 유지. 힙 퍼스트 금지.',gif:`${EB}/GluteusMaximus/BBRackPull.gif`},
+    {id:'t3',name:'펜들레이 로우 (와이드)',sets:3,reps:'6-8',rest:120,note:'앞발로 바닥 누르기. 고관절 깊게 접기. 팔꿈치 직각.',gif:`${EB}/LatissimusDorsi/BBBentOverRow.gif`},
+    {id:'t4',name:'덤벨 인클라인 로우',sets:3,reps:'6-8',rest:90,note:'등 굽히기 (랙풀 반대 개념). 덤벨 직각으로.',gif:`${EB}/LatissimusDorsi/DBInclineRow.gif`},
+    {id:'t5',name:'랫풀다운 (와이드 고중량)',sets:3,reps:'6-8',rest:90,gif:`${EB}/LatissimusDorsi/CBWideGripLAPulldown.gif`},
+    {id:'t6',name:'스트레이트 암 풀다운',sets:3,reps:'8-10',rest:60,gif:`${EB}/LatissimusDorsi/CBStraightArmPulldown.gif`},
+  ]},
+  금:{name:'어깨 (측/후면)',color:A,exercises:[
+    {id:'s1',wu:true,name:'밴드 풀 어파트',sets:3,reps:'15-20',rest:30,gif:`${EB}/TrapeziusMiddle/BandPullApart.gif`},
+    {id:'s2',name:'헤비 덤벨 레터럴 레이즈',sets:4,reps:'6-8',rest:75,gif:`${EB}/DeltoidLateral/DBLateralRaise.gif`},
+    {id:'s3',name:'리어 델트 덤벨 플라이',sets:3,reps:'6-8',rest:75,gif:`${EB}/DeltoidPosterior/DBBentLateralRaise.gif`},
+    {id:'s4',name:'바벨 프론트 레이즈 (EZ바)',sets:3,reps:'6-8',rest:60,gif:`${EB}/DeltoidAnterior/BBFrontRaise.gif`},
+    {id:'s5',name:'케이블 Y-레이즈',sets:3,reps:'6-8',rest:60,gif:`${EB}/TrapeziusLower/CBYRaise.gif`},
+    {id:'s6',name:'머신 숄더 프레스 (뉴트럴)',sets:3,reps:'8-10',rest:90,gif:`${EB}/DeltoidAnterior/SMShoulderPress.gif`},
+  ]},
+  토:{name:'팔',color:'#D4537E',exercises:[
+    {id:'a1',wu:true,name:'케이블 로프 푸시다운',sets:3,reps:'15-20',rest:30,gif:`${EB}/TricepsBrachii/CBPushdownV.gif`},
+    {id:'a2',name:'바벨 컬 (EZ바)',sets:3,reps:'6-8',rest:90,gif:`${EB}/BicepsBrachii/EZBarbellCurl.gif`},
+    {id:'a3',name:'딥스 머신',sets:4,reps:'6-8',rest:90,gif:`${EB}/TricepsBrachii/SMDip.gif`},
+    {id:'a4',name:'인클라인 덤벨 컬',sets:3,reps:'6-8',rest:60,gif:`${EB}/BicepsBrachii/DBInclineCurl.gif`},
+    {id:'a5',name:'라잉 트라이셉스 익스텐션',sets:3,reps:'6-8',rest:75,gif:`${EB}/TricepsBrachii/BBLyingTriExtension.gif`},
+    {id:'a6',name:'해머 컬',sets:3,reps:'8-10',rest:60,gif:`${EB}/Brachioradialis/DBHammerCurl.gif`},
+  ]},
+};
+
+const MEALS_WORKOUT=[
+  {id:'m1',time:'07:00',name:'아침',kcal:530,carbs:70,protein:25,fat:16,
+   items:['오트밀 40g + 우유 200ml','바나나 + 땅콩버터 15g','단백이 1개']},
+  {id:'m2',time:'12:30',name:'점심',kcal:590,carbs:78,protein:35,fat:15,
+   items:['윤식단 or 밀프랩','단백이 2개','김치']},
+  {id:'m3',time:'16:30',name:'오후 간식',kcal:210,carbs:42,protein:10,fat:0,
+   items:['구운 고구마 120g','단백이 1개']},
+  {id:'m4',time:'19:30',name:'저녁 (운동 전)',kcal:515,carbs:65,protein:30,fat:15,
+   items:['흰쌀밥 + 닭가슴살 100g','or 윤식단 + 단백이 2개','김치']},
+  {id:'m5',time:'23:30',name:'운동 후',kcal:150,carbs:5,protein:30,fat:1,
+   items:['옵티멈 셰이크 1스쿱','꿀 1작은술']},
+];
+const MEALS_REST=[
+  {id:'r1',time:'07:00',name:'아침',kcal:530,carbs:70,protein:25,fat:16,
+   items:['오트밀 40g + 우유 200ml','바나나 + 땅콩버터 15g','단백이 1개']},
+  {id:'r2',time:'12:30',name:'점심 (외식)',kcal:null,carbs:null,protein:null,fat:null,
+   items:['외식 자유','단백질 30g 이상 의식할 것']},
+  {id:'r3',time:'16:00',name:'간식',kcal:200,carbs:22,protein:15,fat:6,
+   items:['그릭요거트 150g','블루베리']},
+  {id:'r4',time:'19:00',name:'저녁',kcal:540,carbs:63,protein:32,fat:18,
+   items:['밀프랩 + 김치']},
+  {id:'r5',time:'취침 전',name:'야식',kcal:200,carbs:22,protein:15,fat:6,
+   items:['그릭요거트 + 블루베리']},
+];
+const SUPPS=[
+  {id:'su1',time:'06:50',name:'크레아틴',detail:'모노하이드레이트 5g + 물 500ml'},
+  {id:'su2',time:'07:30',name:'멀티비타민 + 비타민C',detail:'구미 2개 + 비타민C 1,000mg'},
+  {id:'su3',time:'13:00',name:'칼슘+마그네슘+아연+D',detail:'복합 2정 + D3 2,000IU'},
+  {id:'su4',time:'21:30',name:'아르기닌+시트룰린',detail:'2캡슐 + 블랙커피 (or 디카페인)'},
+  {id:'su5',time:'24:00',name:'마그네슘 글리시네이트',detail:'300mg → 취침'},
+];
+const MOBILITY=[
+  {id:'mb1',name:'도어웨이 가슴 스트레치',detail:'30초 × 양쪽 2회',video:'https://www.youtube.com/results?search_query=doorway+chest+stretch'},
+  {id:'mb2',name:'소흉근 스트레치',detail:'30초 × 양쪽 2회',video:'https://www.youtube.com/results?search_query=pec+minor+stretch'},
+  {id:'mb3',name:'흉추 익스텐션 (폼롤러)',detail:'10회',video:'https://www.youtube.com/results?search_query=thoracic+extension+foam+roller'},
+  {id:'mb4',name:'광배근 스트레치',detail:'30초 × 양쪽',video:'https://www.youtube.com/results?search_query=lat+stretch+mobility'},
+  {id:'mb5',name:'월 엔젤',detail:'10회',video:'https://www.youtube.com/results?search_query=wall+angels+exercise'},
+  {id:'mb6',name:'프론 Y-T-W',detail:'각 10회',video:'https://www.youtube.com/results?search_query=prone+YTW+exercise'},
+  {id:'mb7',name:'밴드 풀 어파트',detail:'15회 × 2세트',video:'https://www.youtube.com/results?search_query=band+pull+apart+exercise'},
+  {id:'mb8',name:'친 턱 (Chin Tuck)',detail:'10회 × 5초 홀드',video:'https://www.youtube.com/results?search_query=chin+tuck+exercise'},
+];
+
+function initExSets(ex,defaultWeight){
+  return Array.from({length:ex.sets},()=>({
+    weight:defaultWeight!=null&&defaultWeight!==''?String(defaultWeight):'',
+    reps:'',isWarmup:!!ex.wu,done:false,
+  }));
+}
+function exVolume(sets){
+  if(!sets)return 0;
+  return sets.reduce((sum,s)=>{
+    if(s.done&&!s.isWarmup){const w=parseFloat(s.weight)||0;const r=parseInt(s.reps)||0;return sum+w*r;}
+    return sum;
+  },0);
+}
+
+function Dot({done,onClick}){
+  return(
+    <div onClick={e=>{e.stopPropagation();onClick();}}
+      style={{width:26,height:26,borderRadius:'50%',flexShrink:0,cursor:'pointer',
+        border:done?'none':'1.5px solid var(--border2)',background:done?T:'transparent',
+        display:'flex',alignItems:'center',justifyContent:'center',transition:'background 0.12s'}}>
+      {done&&<svg width="13" height="13" viewBox="0 0 13 13">
+        <polyline points="2,7 5.5,10.5 11,3" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>}
+    </div>
+  );
+}
+
+function ExerciseCard({ex,sets,onUpdate,accentColor,onRestStart,prevSets,weightUnit,onToggleUnit}){
+  const [showGif,setShowGif]=useState(false);
+  const [menuIdx,setMenuIdx]=useState(null);
+  const [showNote,setShowNote]=useState(false);
+  const [gifErr,setGifErr]=useState(false);
+
+  const vol=exVolume(sets);
+  const prevVol=exVolume(prevSets||[]);
+  const volDiff=(vol>0&&prevVol>0)?(vol-prevVol):null;
+  const doneCnt=sets.filter(s=>s.done).length;
+  const allDone=doneCnt===sets.length&&sets.length>0;
+  const ac=accentColor||T;
+
+  function dispW(kgVal){
+    if(kgVal===''||kgVal==null)return '';
+    const n=parseFloat(kgVal);
+    if(isNaN(n))return kgVal;
+    if(weightUnit==='lbs')return (n*2.20462).toFixed(1);
+    return kgVal;
+  }
+  function storeW(inputVal){
+    if(inputVal===''||inputVal==null)return '';
+    const n=parseFloat(inputVal);
+    if(isNaN(n))return inputVal;
+    if(weightUnit==='lbs')return (n/2.20462).toFixed(2);
+    return inputVal;
+  }
+
+  function upd(i,field,val){onUpdate(ex.id,sets.map((s,j)=>j===i?{...s,[field]:val}:s));}
+  function toggleDone(i){const nd=!sets[i].done;upd(i,'done',nd);if(nd)onRestStart(ex.rest,ex.name);}
+  function toggleWarmup(i){upd(i,'isWarmup',!sets[i].isWarmup);setMenuIdx(null);}
+  function addSet(){
+    const last=sets.length>0?sets[sets.length-1]:{weight:'',reps:'',isWarmup:false,done:false};
+    onUpdate(ex.id,[...sets,{weight:last.weight,reps:last.reps,isWarmup:false,done:false}]);
+  }
+  function delSet(i){onUpdate(ex.id,sets.filter((_,j)=>j!==i));setMenuIdx(null);}
+
+  return(
+    <div style={{background:'var(--bg2)',borderRadius:12,padding:'12px 12px 10px',
+      marginBottom:8,borderLeft:`3px solid ${allDone?T:ex.wu?'#2a2a2a':ac}`,
+      opacity:allDone?0.7:1,transition:'opacity 0.2s'}}>
+
+      <div style={{display:'flex',gap:10,alignItems:'flex-start',marginBottom:10}}>
+        {ex.gif&&!gifErr&&(
+          <div onClick={()=>setShowGif(true)} style={{width:48,height:48,borderRadius:8,overflow:'hidden',
+            flexShrink:0,background:'var(--bg3)',cursor:'pointer',border:'0.5px solid var(--border)'}}>
+            <img src={ex.gif} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}}
+              referrerPolicy="no-referrer" onError={()=>setGifErr(true)} loading="lazy"/>
+          </div>
+        )}
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:'flex',gap:5,marginBottom:4,flexWrap:'wrap',alignItems:'center'}}>
+            {ex.wu&&<span style={{fontSize:10,padding:'1px 6px',borderRadius:4,background:'rgba(255,255,255,0.07)',color:'var(--text3)',fontWeight:600,letterSpacing:'0.03em'}}>웜업</span>}
+            {allDone&&<span style={{fontSize:10,padding:'1px 6px',borderRadius:4,background:'rgba(29,158,117,0.15)',color:T,fontWeight:700}}>완료 ✓</span>}
+          </div>
+          <div style={{fontSize:15,fontWeight:700,color:'var(--text)',letterSpacing:'-0.2px'}}>{ex.name}</div>
+          {vol>0&&(
+            <div style={{fontSize:12,color:A,fontWeight:700,marginTop:2,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
+              <span>볼륨 {vol.toLocaleString()}kg</span>
+              {volDiff!=null&&(
+                <span style={{fontSize:11,fontWeight:700,color:volDiff>=0?T:'#ff6060'}}>
+                  ({volDiff>=0?'+':''}{Math.round(volDiff).toLocaleString()}kg)
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+        {(ex.note||ex.alt)&&(
+          <button onClick={()=>setShowNote(!showNote)} style={{
+            fontSize:11,padding:'4px 9px',border:'0.5px solid var(--border2)',borderRadius:6,
+            background:'transparent',color:'var(--text3)',flexShrink:0,
+          }}>{showNote?'접기':'메모'}</button>
+        )}
+      </div>
+
+      {showNote&&(ex.note||ex.alt)&&(
+        <div style={{marginBottom:10,padding:'8px 10px',background:'var(--bg3)',borderRadius:8}}>
+          {ex.note&&<div style={{fontSize:13,color:'var(--text2)',lineHeight:1.65,marginBottom:ex.alt?4:0}}>{ex.note}</div>}
+          {ex.alt&&<div style={{fontSize:12,color:A,fontWeight:600}}>대체: {ex.alt}</div>}
+        </div>
+      )}
+
+      <div style={{display:'grid',gridTemplateColumns:'22px 1fr 1fr 30px 28px',gap:4,marginBottom:4}}>
+        <div style={{fontSize:10,color:'var(--text3)',textAlign:'center'}}>#</div>
+        <button onClick={onToggleUnit} style={{
+          fontSize:10,color:'var(--text3)',textAlign:'center',border:'none',background:'transparent',
+          padding:0,display:'flex',alignItems:'center',justifyContent:'center',gap:3,cursor:'pointer',
+        }}>
+          무게
+          <span style={{fontSize:9,padding:'1px 4px',borderRadius:3,background:'rgba(239,159,39,0.15)',color:A,fontWeight:700}}>{weightUnit}</span>
+        </button>
+        <div style={{fontSize:10,color:'var(--text3)',textAlign:'center'}}>횟수</div>
+        <div/><div/>
+      </div>
+
+      {(()=>{
+        let regN=0;
+        return sets.map((s,i)=>{
+          const lbl=s.isWarmup?'W':++regN;
+          return(
+            <div key={i} style={{
+              display:'grid',gridTemplateColumns:'22px 1fr 1fr 30px 28px',gap:4,
+              alignItems:'center',marginBottom:3,borderRadius:6,padding:'1px 0',
+              background:s.isWarmup?'rgba(255,255,255,0.03)':s.done?'rgba(29,158,117,0.05)':'transparent',
+            }}>
+              <div style={{fontSize:12,fontWeight:700,textAlign:'center',
+                color:s.isWarmup?'var(--text3)':s.done?T:ac}}>{lbl}</div>
+              <input type="number" inputMode="decimal" placeholder="—" value={dispW(s.weight)}
+                onChange={e=>upd(i,'weight',storeW(e.target.value))}
+                style={{padding:'8px 4px',fontSize:16,fontWeight:700,textAlign:'center',
+                  border:`1px solid ${s.done?T+'40':'var(--border2)'}`,
+                  borderRadius:8,background:'var(--bg)',color:'var(--text)',width:'100%'}}/>
+              <input type="number" inputMode="numeric" placeholder="—" value={s.reps}
+                onChange={e=>upd(i,'reps',e.target.value)}
+                style={{padding:'8px 4px',fontSize:16,fontWeight:700,textAlign:'center',
+                  border:`1px solid ${s.done?T+'40':'var(--border2)'}`,
+                  borderRadius:8,background:'var(--bg)',color:'var(--text)',width:'100%'}}/>
+              <div onClick={()=>toggleDone(i)} style={{
+                width:30,height:30,borderRadius:7,flexShrink:0,cursor:'pointer',
+                border:s.done?'none':'1.5px solid var(--border2)',
+                background:s.done?T:'transparent',
+                display:'flex',alignItems:'center',justifyContent:'center',transition:'all 0.15s',
+              }}>
+                {s.done&&<svg width="12" height="12" viewBox="0 0 12 12">
+                  <polyline points="1.5,6.5 4.5,9.5 10.5,2.5" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>}
+              </div>
+              <button onClick={()=>setMenuIdx(menuIdx===i?null:i)} style={{
+                width:28,height:30,borderRadius:7,border:'0.5px solid var(--border)',
+                background:'transparent',color:'var(--text3)',fontSize:13,fontWeight:700,
+                display:'flex',alignItems:'center',justifyContent:'center',padding:0,letterSpacing:1,
+              }}>···</button>
+            </div>
+          );
+        });
+      })()}
+
+      <button onClick={addSet} style={{
+        width:'100%',marginTop:6,padding:'8px',fontSize:13,fontWeight:600,
+        border:'1px dashed var(--border2)',borderRadius:8,background:'transparent',color:'var(--text3)',
+      }}>+ 세트 추가</button>
+
+      {menuIdx!==null&&(
+        <div style={{position:'fixed',inset:0,zIndex:50,background:'rgba(0,0,0,0.6)'}}
+          onClick={()=>setMenuIdx(null)}>
+          <div style={{
+            position:'fixed',bottom:0,left:'50%',transform:'translateX(-50%)',
+            width:'min(480px,100%)',background:'#1a1a1a',borderRadius:'20px 20px 0 0',
+            padding:`16px 16px max(24px,env(safe-area-inset-bottom))`,animation:'slideUp 0.2s ease',
+          }} onClick={e=>e.stopPropagation()}>
+            <div style={{width:36,height:4,background:'#333',borderRadius:2,margin:'0 auto 16px'}}/>
+            <div style={{fontSize:13,fontWeight:700,color:'var(--text3)',marginBottom:12,textAlign:'center',letterSpacing:'0.05em',textTransform:'uppercase'}}>
+              세트 {menuIdx+1}
+            </div>
+            <button onClick={()=>toggleWarmup(menuIdx)} style={{
+              display:'block',width:'100%',padding:'15px',fontSize:15,fontWeight:500,
+              border:'none',borderRadius:12,background:'#252525',color:'var(--text)',marginBottom:8,textAlign:'left',
+            }}>{sets[menuIdx]?.isWarmup?'일반 세트로 변경':'웜업 세트로 변경'}</button>
+            <button onClick={()=>delSet(menuIdx)} style={{
+              display:'block',width:'100%',padding:'15px',fontSize:15,fontWeight:500,
+              border:'none',borderRadius:12,background:'rgba(204,34,68,0.1)',color:'#ff4466',marginBottom:8,textAlign:'left',
+            }}>이 세트 삭제</button>
+            <button onClick={()=>setMenuIdx(null)} style={{
+              display:'block',width:'100%',padding:'15px',fontSize:15,fontWeight:500,
+              border:'none',borderRadius:12,background:'#252525',color:'var(--text3)',textAlign:'center',
+            }}>취소</button>
+          </div>
+        </div>
+      )}
+
+      {showGif&&ex.gif&&(
+        <div style={{position:'fixed',inset:0,zIndex:60,background:'rgba(0,0,0,0.88)',
+          display:'flex',alignItems:'center',justifyContent:'center'}}
+          onClick={()=>setShowGif(false)}>
+          <div style={{background:'#1a1a1a',borderRadius:18,padding:20,maxWidth:300,textAlign:'center'}}
+            onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:14,fontWeight:700,color:'var(--text)',marginBottom:12}}>{ex.name}</div>
+            <img src={ex.gif} alt="" style={{width:240,height:240,objectFit:'contain',borderRadius:10,background:'var(--bg3)'}}
+              referrerPolicy="no-referrer" onError={()=>{setGifErr(true);setShowGif(false);}}/>
+            <button onClick={()=>setShowGif(false)} style={{
+              marginTop:14,padding:'9px 28px',fontSize:13,border:'none',borderRadius:10,background:'#252525',color:'var(--text2)',
+            }}>닫기</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CalendarView({calMonth,setCalMonth,calData,calLoading,onSelectDate}){
+  const {year,month}=calMonth;
+  const firstDay=new Date(year,month-1,1).getDay();
+  const daysInMonth=new Date(year,month,0).getDate();
+  const cells=[];
+  for(let i=0;i<firstDay;i++)cells.push(null);
+  for(let d=1;d<=daysInMonth;d++)cells.push(d);
+  while(cells.length%7!==0)cells.push(null);
+  function prev(){setCalMonth(m=>m.month===1?{year:m.year-1,month:12}:{year:m.year,month:m.month-1});}
+  function next(){setCalMonth(m=>m.month===12?{year:m.year+1,month:1}:{year:m.year,month:m.month+1});}
+  return(
+    <div style={{padding:'0 16px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <button onClick={prev} style={{width:38,height:38,border:'0.5px solid var(--border)',borderRadius:10,background:'transparent',color:'var(--text)',fontSize:20}}>‹</button>
+        <div style={{fontSize:17,fontWeight:800,color:'var(--text)',letterSpacing:'-0.3px'}}>{year}년 {month}월</div>
+        <button onClick={next} style={{width:38,height:38,border:'0.5px solid var(--border)',borderRadius:10,background:'transparent',color:'var(--text)',fontSize:20}}>›</button>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,marginBottom:8}}>
+        {['일','월','화','수','목','금','토'].map((d,i)=>(
+          <div key={d} style={{textAlign:'center',fontSize:11,fontWeight:700,padding:'4px 0',
+            color:i===0?'#ff6060':i===6?'#6090ff':'var(--text3)',letterSpacing:'0.05em'}}>{d}</div>
+        ))}
+      </div>
+      {calLoading?<div style={{textAlign:'center',color:'var(--text3)',fontSize:13,padding:32}}>불러오는 중...</div>:(
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2}}>
+          {cells.map((day,i)=>{
+            if(!day)return<div key={i}/>;
+            const dk=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+            const isToday=dk===DATE_KEY;const info=calData[dk];const dow=i%7;
+            return(
+              <button key={i} onClick={()=>info&&onSelectDate(dk)} style={{
+                display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
+                padding:'8px 0',borderRadius:10,minHeight:48,
+                border:isToday?`1.5px solid ${A}`:'0.5px solid transparent',
+                background:isToday?`rgba(239,159,39,0.1)`:'transparent',
+                color:isToday?A:dow===0?'#ff6060':dow===6?'#6090ff':'var(--text)',
+                cursor:info?'pointer':'default',
+              }}>
+                <span style={{fontSize:14,fontWeight:isToday?800:400}}>{day}</span>
+                {info&&(
+                  <div style={{display:'flex',gap:2,marginTop:3}}>
+                    {info.workout&&<div style={{width:5,height:5,borderRadius:'50%',background:T}}/>}
+                    {info.checks&&<div style={{width:5,height:5,borderRadius:'50%',background:'var(--text3)'}}/>}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div style={{marginTop:16,display:'flex',gap:16,fontSize:11,color:'var(--text3)'}}>
+        <span style={{display:'flex',alignItems:'center',gap:5}}>
+          <span style={{width:7,height:7,borderRadius:'50%',background:T,display:'inline-block'}}/>운동
+        </span>
+        <span style={{display:'flex',alignItems:'center',gap:5}}>
+          <span style={{width:7,height:7,borderRadius:'50%',background:'var(--text3)',display:'inline-block'}}/>식단/영양제
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function HistoryView({dateKey,historyData,historyLoading,onClose}){
+  if(!dateKey)return null;
+  const dStr=new Date(dateKey+'T12:00:00+09:00').toLocaleDateString('ko-KR',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:40,background:'var(--bg)',display:'flex',flexDirection:'column'}}>
+      <div style={{padding:'max(16px,env(safe-area-inset-top)) 16px 14px',borderBottom:'0.5px solid var(--border)',
+        display:'flex',justifyContent:'space-between',alignItems:'center',flexShrink:0}}>
+        <div>
+          <div style={{fontSize:10,color:'var(--text3)',letterSpacing:'0.1em',fontWeight:700,textTransform:'uppercase',marginBottom:4}}>과거 기록</div>
+          <div style={{fontSize:16,fontWeight:800,color:'var(--text)',letterSpacing:'-0.3px'}}>{dStr}</div>
+        </div>
+        <button onClick={onClose} style={{width:36,height:36,border:'0.5px solid var(--border)',
+          borderRadius:10,background:'transparent',color:'var(--text)',fontSize:18}}>✕</button>
+      </div>
+      <div style={{flex:1,overflowY:'auto',padding:'14px 16px',WebkitOverflowScrolling:'touch'}}>
+        {historyLoading&&<div style={{textAlign:'center',padding:48,color:'var(--text3)',fontSize:13}}>불러오는 중...</div>}
+        {!historyLoading&&historyData&&(()=>{
+          const{checks,workout}=historyData;
+          let dayVol=0;const exList=[];
+          for(const[,w] of Object.entries(WORKOUT)){
+            for(const ex of w.exercises){
+              const exSets=workout[ex.id];
+              if(exSets&&exSets.some(s=>s.done)){
+                const vol=exVolume(exSets);dayVol+=vol;
+                exList.push({ex,sets:exSets,vol,color:w.color});
+              }
+            }
+          }
+          const histDow=new Date(dateKey+'T12:00:00+09:00').getDay();
+          const histMeals=histDow===0?MEALS_REST:MEALS_WORKOUT;
+          const mDone=histMeals.filter(m=>checks[`meal_${m.id}`]).length;
+          const mobDone=MOBILITY.filter(m=>checks[`mob_${m.id}`]).length;
+          return(
+            <>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:16}}>
+                {[{label:'총 볼륨',value:dayVol>0?`${dayVol.toLocaleString()}kg`:'—',color:T},
+                  {label:'끼니',value:`${mDone}/${histMeals.length}`,color:A},
+                  {label:'모빌리티',value:`${mobDone}/${MOBILITY.length}`,color:'#7F77DD'},
+                ].map(item=>(
+                  <div key={item.label} style={{textAlign:'center',padding:'14px 8px',background:'var(--bg2)',borderRadius:12}}>
+                    <div style={{fontSize:20,fontWeight:800,color:item.color}}>{item.value}</div>
+                    <div style={{fontSize:11,color:'var(--text3)',marginTop:3}}>{item.label}</div>
+                  </div>
+                ))}
+              </div>
+              {exList.length>0&&<>
+                <div style={{fontSize:11,fontWeight:700,color:'var(--text3)',marginBottom:10,letterSpacing:'0.1em',textTransform:'uppercase'}}>운동 기록</div>
+                {exList.map(({ex,sets,vol,color})=>(
+                  <div key={ex.id} style={{background:'var(--bg2)',borderRadius:12,padding:'12px',marginBottom:8,borderLeft:`3px solid ${color}`}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                      <div style={{fontSize:14,fontWeight:700,color:'var(--text)'}}>{ex.name}</div>
+                      {vol>0&&<div style={{fontSize:12,color:A,fontWeight:700}}>볼륨 {vol.toLocaleString()}kg</div>}
+                    </div>
+                    {sets.map((s,i)=>(
+                      <div key={i} style={{display:'flex',gap:8,alignItems:'center',fontSize:13,marginBottom:3,
+                        opacity:s.done?1:0.4,color:s.done?'var(--text)':'var(--text3)'}}>
+                        <span style={{width:20,textAlign:'center',fontSize:11,fontWeight:700,color:s.isWarmup?'var(--text3)':color}}>
+                          {s.isWarmup?'W':i+1}
+                        </span>
+                        <span style={{flex:1}}>{s.weight||'—'}kg × {s.reps||'—'}회</span>
+                        {s.isWarmup&&<span style={{fontSize:10,color:'var(--text3)',background:'var(--bg3)',padding:'1px 5px',borderRadius:4}}>웜업</span>}
+                        {s.done&&<svg width="11" height="11" viewBox="0 0 11 11">
+                          <polyline points="1,5.5 4,8.5 10,2" fill="none" stroke={T} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </>}
+              {exList.length===0&&<div style={{textAlign:'center',color:'var(--text3)',fontSize:13,padding:'32px 0'}}>운동 기록 없음</div>}
+            </>
+          );
+        })()}
+        <div style={{height:40}}/>
+      </div>
+    </div>
+  );
+}
+
+function App(){
+  const [loading,setLoading]=useState(true);
+  const [dbErr,setDbErr]=useState(null);
+  const [saveErr,setSaveErr]=useState(null);
+  const [checks,setChecks]=useState({});
+  const [workoutSets,setWorkoutSets]=useState({});
+  const [prevWorkout,setPrevWorkout]=useState({});
+  const [weightUnit,setWeightUnit]=useState('kg');
+  const [wDay,setWDay]=useState(TODAY_DAY);
+  const [subTab,setSubTab]=useState('운동');
+  const [restTimer,setRestTimer]=useState(null); // {endTime, total, name}
+  const [timerRem,setTimerRem]=useState(0);
+  const [showCal,setShowCal]=useState(false);
+  const [calMonth,setCalMonth]=useState({year:TODAY_KST.getUTCFullYear(),month:TODAY_KST.getUTCMonth()+1});
+  const [calData,setCalData]=useState({});
+  const [calLoading,setCalLoading]=useState(false);
+  const [historyDate,setHistoryDate]=useState(null);
+  const [historyData,setHistoryData]=useState(null);
+  const [historyLoading,setHistoryLoading]=useState(false);
+  const intervalRef=useRef(null);
+  const timeoutRef=useRef(null);
+  const lastBeepRef=useRef(-1);
+
+  useEffect(()=>{
+    let live=true;
+    (async()=>{
+      try{
+        const[c,wv2,wg,recentRows]=await Promise.all([
+          dbGet(DATE_KEY,'checks'),
+          dbGet(DATE_KEY,'workout_v2'),
+          dbGet('global','weights'),
+          dbGetRecentWorkouts(DATE_KEY),
+        ]);
+        if(!live)return;
+        setChecks(c||{});
+        const pw={};
+        for(const row of(recentRows||[])){
+          try{
+            const w=JSON.parse(row.value);
+            for(const[exId,exSets]of Object.entries(w)){
+              if(!pw[exId]&&Array.isArray(exSets)&&exSets.some(s=>s.done)){
+                pw[exId]=exSets;
+              }
+            }
+          }catch(e){}
+        }
+        setPrevWorkout(pw);
+        const ws={};
+        for(const w of Object.values(WORKOUT)){
+          for(const ex of w.exercises){
+            if(wv2&&wv2[ex.id]){
+              ws[ex.id]=wv2[ex.id];
+            }else if(pw[ex.id]){
+              ws[ex.id]=pw[ex.id].map(s=>({...s,done:false}));
+            }else{
+              ws[ex.id]=initExSets(ex,wg?.[ex.id]);
+            }
+          }
+        }
+        setWorkoutSets(ws);
+      }catch(err){
+        if(!live)return;
+        setDbErr(`연결 오류 (${err.message})`);
+      }finally{if(live)setLoading(false);}
+    })();
+    return()=>{live=false;};
+  },[]);
+
+  useEffect(()=>{
+    function checkDate(){if(kstDateKey()!==DATE_KEY)window.location.reload();}
+    function onVis(){if(!document.hidden)checkDate();}
+    document.addEventListener('visibilitychange',onVis);
+    window.addEventListener('focus',checkDate);
+    window.addEventListener('pageshow',checkDate);
+    const iv=setInterval(checkDate,60000);
+    return()=>{
+      document.removeEventListener('visibilitychange',onVis);
+      window.removeEventListener('focus',checkDate);
+      window.removeEventListener('pageshow',checkDate);
+      clearInterval(iv);
+    };
+  },[]);
+
+  // Timestamp-based timer — works in background
+  useEffect(()=>{
+    if(!restTimer){clearInterval(intervalRef.current);return;}
+    lastBeepRef.current=-1;
+    function tick(){
+      const rem=Math.max(0,Math.ceil((restTimer.endTime-Date.now())/1000));
+      setTimerRem(rem);
+      if(rem===0){
+        if(lastBeepRef.current!==0){
+          lastBeepRef.current=0;
+          playEndBeep();
+          timeoutRef.current=setTimeout(()=>setRestTimer(null),2000);
+        }
+      }else if(rem<=3&&lastBeepRef.current!==rem){
+        lastBeepRef.current=rem;
+        playCountdownBeep();
+      }
+    }
+    tick();
+    intervalRef.current=setInterval(tick,250);
+    return()=>clearInterval(intervalRef.current);
+  },[restTimer]);
+
+  useEffect(()=>{
+    if(!showCal)return;
+    setCalLoading(true);
+    dbGetMonth(calMonth.year,calMonth.month)
+      .then(rows=>{
+        const data={};
+        for(const row of rows){
+          if(!data[row.date_key])data[row.date_key]={};
+          if(row.store_key==='workout_v2')data[row.date_key].workout=true;
+          if(row.store_key==='checks')data[row.date_key].checks=true;
+        }
+        setCalData(data);
+      })
+      .catch(e=>console.error(e))
+      .finally(()=>setCalLoading(false));
+  },[calMonth,showCal]);
+
+  useEffect(()=>{
+    if(!historyDate){setHistoryData(null);return;}
+    setHistoryLoading(true);
+    Promise.all([dbGet(historyDate,'checks'),dbGet(historyDate,'workout_v2')])
+      .then(([c,w])=>setHistoryData({checks:c||{},workout:w||{}}))
+      .catch(e=>console.error(e))
+      .finally(()=>setHistoryLoading(false));
+  },[historyDate]);
+
+  const toggle=useCallback((key)=>{
+    if(kstDateKey()!==DATE_KEY){window.location.reload();return;}
+    setChecks(prev=>{
+      const next={...prev,[key]:!prev[key]};
+      dbSet(DATE_KEY,'checks',next).then(()=>setSaveErr(null)).catch(()=>setSaveErr('저장 실패'));
+      return next;
+    });
+  },[]);
+
+  const saveWS=useCallback((ws)=>{
+    dbSet(DATE_KEY,'workout_v2',ws).then(()=>setSaveErr(null)).catch(()=>setSaveErr('저장 실패'));
+  },[]);
+
+  const updateExSets=useCallback((exId,newSets)=>{
+    setWorkoutSets(prev=>{const next={...prev,[exId]:newSets};saveWS(next);return next;});
+  },[saveWS]);
+
+  const startRest=useCallback((restTime,name)=>{
+    clearTimeout(timeoutRef.current);
+    clearInterval(intervalRef.current);
+    lastBeepRef.current=-1;
+    setRestTimer({endTime:Date.now()+restTime*1000,total:restTime,name});
+  },[]);
+
+  function adjustTimer(delta){
+    setRestTimer(p=>{
+      if(!p)return p;
+      const newEnd=Math.max(Date.now()+1000,p.endTime+delta*1000);
+      const newTotal=Math.max(1,p.total+delta);
+      return{...p,endTime:newEnd,total:newTotal};
+    });
+  }
+
+  const toggleUnit=useCallback(()=>setWeightUnit(u=>u==='kg'?'lbs':'kg'),[]);
+
+  const wo=WORKOUT[wDay];
+  const wdayExes=wo?.exercises||[];
+  const totalS=wdayExes.reduce((a,e)=>a+(workoutSets[e.id]?.length||e.sets),0);
+  const doneS=wdayExes.reduce((a,e)=>a+(workoutSets[e.id]?.filter(s=>s.done).length||0),0);
+  const dayVol=useMemo(()=>wdayExes.reduce((a,e)=>a+exVolume(workoutSets[e.id]||[]),0),[workoutSets,wDay]);
+  const isRestDay=wDay==='일';
+  const meals=isRestDay?MEALS_REST:MEALS_WORKOUT;
+  const macroTarget={kcal:2350,carbs:300,protein:120,fat:75};
+  const isDateStale=kstDateKey()!==DATE_KEY;
+  const todayChecks=isDateStale?{}:checks;
+  const mealDone=meals.filter(m=>todayChecks[`meal_${m.id}`]).length;
+  const suppDone=SUPPS.filter(s=>todayChecks[`sup_${s.id}`]).length;
+  const mobDone=MOBILITY.filter(m=>todayChecks[`mob_${m.id}`]).length;
+  const timerVisible=!!(restTimer&&timerRem>0);
+
+  if(loading)return(
+    <div style={{display:'flex',flexDirection:'column',height:'100dvh',alignItems:'center',justifyContent:'center',gap:12,background:'#0f0f0f'}}>
+      <div style={{fontSize:10,color:A,letterSpacing:'0.2em',fontWeight:800,textTransform:'uppercase',marginBottom:8}}>JUNHO FITNESS</div>
+      <div style={{fontSize:15,fontWeight:400,color:'#555'}}>기록 불러오는 중</div>
+      <div style={{position:'relative',width:100,height:2,background:'#1e1e1e',borderRadius:1,overflow:'hidden',marginTop:8}}>
+        <div style={{position:'absolute',top:0,height:'100%',width:'40%',background:A,borderRadius:1,animation:'bar 1s ease-in-out infinite'}}/>
+      </div>
+    </div>
+  );
+
+  return(
+    <div style={{display:'flex',flexDirection:'column',height:'100dvh',background:'var(--bg)'}}>
+
+      {/* ── header ── */}
+      <div style={{padding:'max(16px,env(safe-area-inset-top)) 16px 12px',flexShrink:0}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+          <div>
+            <div style={{fontSize:9,color:A,letterSpacing:'0.18em',fontWeight:800,textTransform:'uppercase',marginBottom:6}}>JUNHO FITNESS</div>
+            <div style={{fontSize:24,fontWeight:800,color:'#fff',letterSpacing:'-0.5px',lineHeight:1.1}}>{DATE_WEEKDAY}</div>
+            <div style={{fontSize:14,color:'var(--text3)',marginTop:2,fontWeight:400}}>{DATE_MD}</div>
+          </div>
+          <div style={{display:'flex',gap:8,alignItems:'flex-start'}}>
+            <div style={{textAlign:'right'}}>
+              {!isRestDay&&(
+                <div style={{marginBottom:4}}>
+                  <span style={{fontSize:11,padding:'3px 9px',borderRadius:20,background:'rgba(239,159,39,0.12)',color:A,fontWeight:700}}>{doneS}/{totalS}세트</span>
+                </div>
+              )}
+              <div>
+                <span style={{fontSize:11,padding:'3px 9px',borderRadius:20,background:'rgba(29,158,117,0.12)',color:T,fontWeight:700}}>{mealDone}/{meals.length}끼니</span>
+              </div>
+            </div>
+            <button onClick={()=>setShowCal(true)} style={{
+              width:38,height:38,border:'0.5px solid var(--border)',borderRadius:10,
+              background:'transparent',fontSize:17,display:'flex',alignItems:'center',justifyContent:'center',
+            }}>📅</button>
+          </div>
+        </div>
+        {(dbErr||saveErr)&&<div style={{marginTop:8,fontSize:11,color:'#ff4466',background:'rgba(255,68,102,0.08)',borderRadius:6,padding:'4px 8px'}}>{dbErr||saveErr}</div>}
+      </div>
+
+      {/* ── day tabs ── */}
+      <div style={{display:'flex',gap:6,padding:'0 16px 12px',overflowX:'auto',flexShrink:0}}>
+        {['일','월','화','수','목','금','토'].map(d=>{
+          const sel=wDay===d;const isToday=d===TODAY_DAY;
+          return(
+            <button key={d} onClick={()=>{setWDay(d);clearTimeout(timeoutRef.current);setRestTimer(null);}} style={{
+              padding:'6px 14px',fontSize:13,fontWeight:sel?800:500,
+              border:'none',borderRadius:20,flexShrink:0,
+              background:sel?A:'#1a1a1a',
+              color:sel?'#0f0f0f':isToday?'#fff':'var(--text3)',
+              transition:'all 0.15s',position:'relative',
+            }}>
+              {d}
+              {isToday&&!sel&&<div style={{position:'absolute',bottom:3,left:'50%',transform:'translateX(-50%)',
+                width:3,height:3,borderRadius:'50%',background:A}}/>}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── sub-tabs ── */}
+      <div style={{display:'flex',borderBottom:'1px solid #1a1a1a',padding:'0 12px',flexShrink:0}}>
+        {['운동','식단','영양제'].map(t=>{
+          const sel=subTab===t;
+          return(
+            <button key={t} onClick={()=>setSubTab(t)} style={{
+              padding:'10px 12px',fontSize:14,fontWeight:sel?800:400,
+              border:'none',borderBottom:sel?`2px solid ${A}`:'2px solid transparent',
+              marginBottom:-1,background:'transparent',
+              color:sel?'#fff':'var(--text3)',transition:'all 0.15s',
+            }}>{t}</button>
+          );
+        })}
+      </div>
+
+      {/* ── content ── */}
+      <div style={{flex:1,overflowY:'auto',padding:'12px 16px 0',WebkitOverflowScrolling:'touch'}}>
+
+        {/* 운동 — 휴식일 */}
+        {subTab==='운동'&&isRestDay&&(
+          <div style={{display:'flex',flexDirection:'column',alignItems:'center',padding:'56px 20px',gap:12}}>
+            <div style={{fontSize:52,marginBottom:4}}>🧘</div>
+            <div style={{fontSize:22,fontWeight:800,color:'#fff',letterSpacing:'-0.3px'}}>휴식일</div>
+            <div style={{fontSize:14,color:'var(--text3)',textAlign:'center',lineHeight:1.8}}>
+              오늘은 쉬어가는 날.<br/>모빌리티 루틴만 챙겨도 충분해요.
+            </div>
+            <button onClick={()=>setSubTab('식단')} style={{
+              marginTop:16,padding:'12px 24px',fontSize:14,fontWeight:700,
+              border:`1px solid ${A}40`,borderRadius:20,background:`rgba(239,159,39,0.08)`,color:A,
+            }}>식단 확인하기</button>
+          </div>
+        )}
+
+        {/* 운동 — 운동 있는 날 */}
+        {subTab==='운동'&&wo&&!isRestDay&&<>
+          {/* summary */}
+          <div style={{background:'var(--bg2)',borderRadius:12,padding:'14px 16px',marginBottom:10,borderLeft:`3px solid ${wo.color}`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:wo&&dayVol>0?10:6}}>
+              <div>
+                <div style={{fontSize:12,color:wo.color,fontWeight:700,letterSpacing:'0.05em',marginBottom:4}}>{wo.name.toUpperCase()}</div>
+                {dayVol>0&&<div style={{fontSize:12,color:'var(--text3)',fontWeight:400}}>총 볼륨 <span style={{color:A,fontWeight:700}}>{dayVol.toLocaleString()}kg</span></div>}
+              </div>
+              <div style={{textAlign:'right'}}>
+                <span style={{fontSize:36,fontWeight:800,color:wo.color,lineHeight:1}}>{doneS}</span>
+                <span style={{fontSize:14,color:'var(--text3)',fontWeight:400}}> / {totalS}</span>
+                <div style={{fontSize:10,color:'var(--text3)',marginTop:2,letterSpacing:'0.05em'}}>SETS</div>
+              </div>
+            </div>
+            <div style={{height:3,background:'#2a2a2a',borderRadius:2,overflow:'hidden'}}>
+              <div style={{height:'100%',width:`${totalS>0?Math.round((doneS/totalS)*100):0}%`,background:wo.color,transition:'width 0.4s'}}/>
+            </div>
+          </div>
+
+          {/* exercises */}
+          {wo.exercises.map(ex=>(
+            <ExerciseCard key={ex.id} ex={ex}
+              sets={workoutSets[ex.id]||initExSets(ex)}
+              onUpdate={updateExSets}
+              accentColor={wo.color}
+              onRestStart={startRest}
+              prevSets={prevWorkout[ex.id]}
+              weightUnit={weightUnit}
+              onToggleUnit={toggleUnit}/>
+          ))}
+
+          {/* mobility */}
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',margin:'20px 0 10px'}}>
+            <div style={{fontSize:11,fontWeight:700,color:'var(--text3)',letterSpacing:'0.1em',textTransform:'uppercase'}}>모빌리티</div>
+            <span style={{fontSize:12,color:T,fontWeight:700}}>{mobDone}/{MOBILITY.length}</span>
+          </div>
+          {MOBILITY.map(m=>{
+            const k=`mob_${m.id}`;const done=!!todayChecks[k];
+            return(
+              <div key={m.id} onClick={()=>toggle(k)}
+                style={{background:'var(--bg2)',borderRadius:10,cursor:'pointer',
+                  display:'flex',alignItems:'center',gap:12,padding:'10px 14px',
+                  marginBottom:6,opacity:done?0.45:1,transition:'opacity 0.2s'}}>
+                <Dot done={done} onClick={()=>toggle(k)}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:done?400:600,textDecoration:done?'line-through':'none',color:'var(--text)'}}>{m.name}</div>
+                  <div style={{fontSize:11,color:'var(--text3)',marginTop:2}}>{m.detail}</div>
+                </div>
+                {m.video&&(
+                  <a href={m.video} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()}
+                    style={{flexShrink:0,display:'flex',alignItems:'center',gap:4,fontSize:11,padding:'4px 8px',
+                      borderRadius:6,border:'0.5px solid rgba(255,60,60,0.3)',background:'rgba(255,60,60,0.06)',
+                      color:'#ff5555',textDecoration:'none',fontWeight:700}}>
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                      <polygon points="2,1.5 9,5 2,8.5" fill="#ff5555"/>
+                    </svg>영상
+                  </a>
+                )}
+              </div>
+            );
+          })}
+        </>}
+
+        {/* 식단 */}
+        {subTab==='식단'&&<>
+          <div style={{background:'var(--bg2)',borderRadius:12,padding:'14px 16px',marginBottom:10}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <div style={{fontSize:10,color:'var(--text3)',fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase'}}>일일 목표 매크로</div>
+              <div style={{fontSize:10,color:A,fontWeight:700}}>{macroTarget.kcal.toLocaleString()} kcal</div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:12}}>
+              {[{l:'탄수화물',v:macroTarget.carbs,u:'g',c:'#378ADD'},
+                {l:'순단백질',v:macroTarget.protein,u:'g',c:T},
+                {l:'지방',v:macroTarget.fat,u:'g',c:'#D4537E'}].map(m=>(
+                <div key={m.l} style={{textAlign:'center',background:'var(--bg3)',borderRadius:10,padding:'10px 6px'}}>
+                  <div style={{fontSize:20,fontWeight:800,color:m.c}}>{m.v}g</div>
+                  <div style={{fontSize:10,color:'var(--text3)',marginTop:3}}>{m.l}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{paddingTop:10,borderTop:'0.5px solid var(--border)',display:'flex',justifyContent:'space-between',fontSize:12}}>
+              <span style={{color:'var(--text3)'}}>식사 완료</span>
+              <span style={{fontWeight:700,color:T}}>{mealDone} / {meals.length} 끼니</span>
+            </div>
+          </div>
+          {meals.map(meal=>{
+            const k=`meal_${meal.id}`;const done=!!todayChecks[k];
+            return(
+              <div key={meal.id} style={{background:'var(--bg2)',borderRadius:12,padding:'14px 16px',marginBottom:8,opacity:done?0.5:1,transition:'opacity 0.2s'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
+                  <div style={{display:'flex',alignItems:'center',gap:12}}>
+                    <Dot done={done} onClick={()=>toggle(k)}/>
+                    <div>
+                      <div style={{fontSize:15,fontWeight:700,textDecoration:done?'line-through':'none',color:'var(--text)'}}>{meal.name}</div>
+                      <div style={{fontSize:11,color:'var(--text3)',marginTop:2}}>{meal.time}</div>
+                    </div>
+                  </div>
+                  {meal.kcal!=null&&(
+                    <div style={{textAlign:'right'}}>
+                      <div style={{fontSize:22,fontWeight:800,color:A,lineHeight:1}}>{meal.kcal}</div>
+                      <div style={{fontSize:10,color:'var(--text3)'}}>kcal</div>
+                    </div>
+                  )}
+                </div>
+                {meal.carbs!=null&&(
+                <div style={{display:'flex',gap:14,fontSize:12,marginBottom:10,paddingBottom:10,borderBottom:'0.5px solid var(--border)'}}>
+                  <span style={{color:'#378ADD',fontWeight:600}}>탄 {meal.carbs}g</span>
+                  <span style={{color:T,fontWeight:600}}>단 {meal.protein}g</span>
+                  <span style={{color:'#D4537E',fontWeight:600}}>지 {meal.fat}g</span>
+                </div>
+                )}
+                {meal.items.map((item,i)=><div key={i} style={{fontSize:13,color:'var(--text2)',lineHeight:2}}>{item}</div>)}
+              </div>
+            );
+          })}
+          {!isRestDay&&(
+            <div style={{background:'var(--bg2)',borderRadius:12,padding:'14px 16px',marginBottom:8,borderLeft:`3px solid ${A}`}}>
+              <div style={{fontSize:12,fontWeight:700,color:A,marginBottom:6}}>치팅밀 (토요일 저녁)</div>
+              <div style={{fontSize:13,color:'var(--text2)',lineHeight:1.7}}>한 끼만 자유 · 순단백 120g 매일 사수 · 탄수 350~400g까지 허용</div>
+            </div>
+          )}
+        </>}
+
+        {/* 영양제 */}
+        {subTab==='영양제'&&<>
+          <div style={{background:'var(--bg2)',borderRadius:12,padding:'14px 16px',marginBottom:10}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <div style={{fontSize:10,color:'var(--text3)',fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase'}}>오늘 영양제 복용</div>
+              <div style={{fontSize:16,fontWeight:800,color:A}}>{suppDone} / {SUPPS.length}</div>
+            </div>
+            <div style={{height:4,background:'#2a2a2a',borderRadius:2,overflow:'hidden'}}>
+              <div style={{height:'100%',width:`${Math.round((suppDone/SUPPS.length)*100)}%`,background:A,transition:'width 0.4s'}}/>
+            </div>
+          </div>
+          {SUPPS.map(s=>{
+            const k=`sup_${s.id}`;const done=!!todayChecks[k];
+            return(
+              <div key={s.id} onClick={()=>toggle(k)}
+                style={{background:'var(--bg2)',borderRadius:10,cursor:'pointer',
+                  display:'flex',alignItems:'center',gap:12,padding:'12px 14px',
+                  marginBottom:6,opacity:done?0.45:1,transition:'opacity 0.2s'}}>
+                <Dot done={done} onClick={()=>toggle(k)}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:14,fontWeight:700,textDecoration:done?'line-through':'none',color:'var(--text)',marginBottom:3}}>{s.name}</div>
+                  <div style={{fontSize:12,color:'var(--text3)'}}>{s.detail}</div>
+                </div>
+                <div style={{fontSize:12,color:'var(--text3)',flexShrink:0}}>{s.time}</div>
+              </div>
+            );
+          })}
+          <div style={{background:'var(--bg2)',borderRadius:12,padding:'14px 16px',marginTop:4,marginBottom:8,border:`0.5px solid rgba(239,159,39,0.2)`}}>
+            <div style={{fontSize:11,fontWeight:700,color:A,marginBottom:12,letterSpacing:'0.05em'}}>추가 구매 우선순위</div>
+            {[{r:'❶ 필수',n:'크레아틴 모노하이드레이트 500g',p:'~18,000원'},
+              {r:'❷ 필수',n:'비타민C 1,000mg 100정',p:'~9,000원'},
+              {r:'❸ 권장',n:'비타민D3 2,000IU 240정',p:'~12,000원'},
+              {r:'❹ 권장',n:'마그네슘 글리시네이트 300mg',p:'~12,000원'},
+            ].map(item=>(
+              <div key={item.n} style={{display:'flex',justifyContent:'space-between',fontSize:12,padding:'8px 0',borderBottom:'0.5px solid var(--border)'}}>
+                <span style={{color:'var(--text2)'}}>{item.r} {item.n}</span>
+                <span style={{fontWeight:700,color:A,flexShrink:0,marginLeft:8}}>{item.p}</span>
+              </div>
+            ))}
+            <div style={{fontSize:11,color:'var(--text3)',marginTop:10}}>아이허브 $40 이상 무료배송</div>
+          </div>
+        </>}
+
+        <div style={{height:timerVisible?104:36}}/>
+      </div>
+
+      {/* ── fixed rest timer ── */}
+      {timerVisible&&(
+        <div style={{
+          position:'fixed',
+          bottom:'max(16px,env(safe-area-inset-bottom))',
+          left:'50%',transform:'translateX(-50%)',
+          width:'min(448px,calc(100% - 32px))',
+          background:'#1a1a1a',
+          borderRadius:16,
+          padding:'12px 14px',
+          border:`1px solid ${timerRem<=3?'rgba(255,96,96,0.4)':A+'40'}`,
+          zIndex:20,
+          boxShadow:'0 8px 32px rgba(0,0,0,0.7)',
+        }}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:10,color:'var(--text3)',marginBottom:3,letterSpacing:'0.1em',fontWeight:700,
+                whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',maxWidth:160}}>
+                휴식 중 — {restTimer.name}
+              </div>
+              <div style={{
+                fontSize:42,fontWeight:800,lineHeight:1,fontVariantNumeric:'tabular-nums',letterSpacing:'-1px',
+                color:timerRem<=3?'#ff6060':A,
+                transition:'color 0.3s',
+              }}>
+                {Math.floor(timerRem/60)}:{String(timerRem%60).padStart(2,'0')}
+              </div>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:8}}>
+              <div style={{height:3,width:80,background:'#2a2a2a',borderRadius:2,overflow:'hidden'}}>
+                <div style={{
+                  height:'100%',
+                  width:`${restTimer.total>0?Math.min(100,Math.round((timerRem/restTimer.total)*100)):0}%`,
+                  background:timerRem<=3?'#ff6060':A,
+                  transition:'width 0.25s linear, background 0.3s',
+                }}/>
+              </div>
+              <div style={{display:'flex',gap:5}}>
+                <button onClick={()=>adjustTimer(-15)} style={{
+                  fontSize:11,padding:'5px 8px',border:'0.5px solid var(--border2)',
+                  borderRadius:7,background:'transparent',color:'var(--text3)',
+                }}>-15s</button>
+                <button onClick={()=>adjustTimer(15)} style={{
+                  fontSize:11,padding:'5px 8px',border:'0.5px solid var(--border2)',
+                  borderRadius:7,background:'transparent',color:'var(--text3)',
+                }}>+15s</button>
+                <button onClick={()=>{clearTimeout(timeoutRef.current);clearInterval(intervalRef.current);setRestTimer(null);}} style={{
+                  fontSize:11,padding:'5px 10px',border:'0.5px solid var(--border2)',
+                  borderRadius:7,background:'transparent',color:'var(--text3)',
+                }}>건너뛰기</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── calendar overlay ── */}
+      {showCal&&(
+        <div style={{position:'fixed',inset:0,zIndex:30,background:'var(--bg)',display:'flex',flexDirection:'column'}}>
+          <div style={{padding:'max(16px,env(safe-area-inset-top)) 16px 14px',borderBottom:'0.5px solid var(--border)',
+            display:'flex',justifyContent:'space-between',alignItems:'center',flexShrink:0}}>
+            <div style={{fontSize:10,fontWeight:800,color:'var(--text3)',letterSpacing:'0.15em',textTransform:'uppercase'}}>기록 달력</div>
+            <button onClick={()=>setShowCal(false)} style={{width:34,height:34,border:'0.5px solid var(--border)',
+              borderRadius:10,background:'transparent',color:'var(--text)',fontSize:18}}>✕</button>
+          </div>
+          <div style={{flex:1,overflowY:'auto',padding:'20px 0',WebkitOverflowScrolling:'touch'}}>
+            <CalendarView calMonth={calMonth} setCalMonth={(m)=>{
+              setCalMonth(m);
+              setCalLoading(true);
+              dbGetMonth(m.year,m.month).then(rows=>{
+                const data={};
+                for(const row of rows){
+                  if(!data[row.date_key])data[row.date_key]={};
+                  if(row.store_key==='workout_v2')data[row.date_key].workout=true;
+                  if(row.store_key==='checks')data[row.date_key].checks=true;
+                }
+                setCalData(data);
+              }).catch(e=>console.error(e)).finally(()=>setCalLoading(false));
+            }} calData={calData} calLoading={calLoading}
+              onSelectDate={(dk)=>{setHistoryDate(dk);}}/>
+            <div style={{height:40}}/>
+          </div>
+        </div>
+      )}
+
+      {/* ── history detail ── */}
+      {historyDate&&(
+        <HistoryView dateKey={historyDate} historyData={historyData}
+          historyLoading={historyLoading}
+          onClose={()=>setHistoryDate(null)}/>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('app')).render(<App/>);
+</script>
+<script>
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.getRegistrations().then(regs=>{regs.forEach(r=>r.unregister());});
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "appId": "com.junho.fitness",
+  "appName": "JH Fitness",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "ios": {
+    "contentInset": "always",
+    "scrollEnabled": false,
+    "backgroundColor": "#0f0f0f"
+  }
+}

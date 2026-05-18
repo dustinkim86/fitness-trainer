@@ -3,3 +3,13 @@
 
 # Superpowers brainstorming sessions
 .superpowers
+
+# Node
+node_modules/
+
+# Capacitor iOS derived data
+ios/App/Pods/
+ios/App/App.xcworkspace/xcuserdata/
+ios/.DS_Store
+
+# www CDN bundles are kept in git for offline iOS bundling

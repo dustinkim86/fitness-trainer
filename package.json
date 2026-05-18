@@ -1,0 +1,27 @@
+{
+  "name": "fitness_trainer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "cap:sync": "npx cap sync",
+    "cap:open:ios": "npx cap open ios",
+    "build:www": "cp index.html www/index.html && cp icon-192.png www/ && cp icon-512.png www/ && cp manifest.json www/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dustinkim86/fitness-trainer.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/dustinkim86/fitness-trainer/issues"
+  },
+  "homepage": "https://github.com/dustinkim86/fitness-trainer#readme",
+  "dependencies": {
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4",
+    "@capacitor/ios": "^8.3.4"
+  }
+}
